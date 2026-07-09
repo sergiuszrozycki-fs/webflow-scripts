@@ -17,7 +17,15 @@
     staticRoomPin: "[data-wf--c-static-pin-element--variant]",
     roomPill: ".types_wrapper-item[data-trigger]",
     slideAnchor: "[data-slide]",
+    gallerySlider: ".slide-gallery-box",
+    gallerySlide: ".slide-gallery-slide",
+    gallerySlideImage: ".slide-gallery-image",
   };
+
+  const LIGHTBOX_CSS_URL =
+    "https://cdn.jsdelivr.net/npm/glightbox/dist/css/glightbox.min.css";
+  const LIGHTBOX_JS_URL =
+    "https://cdn.jsdelivr.net/npm/glightbox/dist/js/glightbox.min.js";
 
   /* ============================================================
    * UTILITIES
@@ -70,11 +78,12 @@
       if (!box || box.swiper || typeof Swiper === "undefined") return;
 
       const isRoomSlider = box.hasAttribute("data-room");
+      const isGallerySlider = box.classList.contains("slide-gallery-box");
       const dataSlides = parseFloat(box.getAttribute("data-slides"));
       const desktopSlides = Number.isNaN(dataSlides) ? "auto" : dataSlides;
 
       new Swiper(box, {
-        spaceBetween: 20,
+        spaceBetween: isGallerySlider ? 10 : 20,
         loop: false,
         slidesPerView: 1,
         slidesPerGroup: 1,
@@ -696,6 +705,108 @@
   })();
 
   /* ============================================================
+   * MODULE: Gallery lightbox (chambre photo sliders -> GLightbox)
+   * ---------------------------------------------------------
+   * Loads GLightbox from CDN on first use, wraps each gallery
+   * slide's image in an anchor pointing at its largest available
+   * srcset candidate, and groups anchors per swiper instance via
+   * data-gallery so multiple room galleries on the same page
+   * don't bleed into each other when navigating the lightbox.
+   * ========================================================== */
+  const GalleryLightbox = (() => {
+    let libraryLoading = null;
+    let lightboxInstance = null;
+    let uid = 0;
+
+    function loadLibrary() {
+      if (window.GLightbox) return Promise.resolve();
+      if (libraryLoading) return libraryLoading;
+
+      libraryLoading = new Promise((resolve, reject) => {
+        if (!document.querySelector(`link[href="${LIGHTBOX_CSS_URL}"]`)) {
+          const css = document.createElement("link");
+          css.rel = "stylesheet";
+          css.href = LIGHTBOX_CSS_URL;
+          document.head.appendChild(css);
+        }
+
+        const script = document.createElement("script");
+        script.src = LIGHTBOX_JS_URL;
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+
+      return libraryLoading;
+    }
+
+    function bestSrc(img) {
+      const srcset = img.getAttribute("srcset");
+      if (!srcset) return img.currentSrc || img.src;
+
+      const candidates = srcset
+        .split(",")
+        .map((entry) => entry.trim().split(/\s+/))
+        .filter((parts) => parts.length === 2)
+        .map(([url, size]) => ({ url, width: parseInt(size, 10) || 0 }));
+
+      if (!candidates.length) return img.currentSrc || img.src;
+
+      return candidates.sort((a, b) => b.width - a.width)[0].url;
+    }
+
+    function wireBox(box) {
+      const slides = [...box.querySelectorAll(SELECTORS.gallerySlide)];
+      if (!slides.length) return;
+
+      const galleryName = box.dataset.lightboxGallery || `chambre-gallery-${uid++}`;
+      box.dataset.lightboxGallery = galleryName;
+
+      slides.forEach((slide) => {
+        if (slide.dataset.lightboxWired) return;
+
+        const img = slide.querySelector(SELECTORS.gallerySlideImage);
+        if (!img) return;
+
+        const link = document.createElement("a");
+        link.className = "gallery-lightbox-link";
+        link.href = bestSrc(img);
+        link.setAttribute("data-gallery", galleryName);
+        link.setAttribute("data-glightbox", "");
+        link.style.display = "block";
+        link.style.width = "100%";
+        link.style.height = "100%";
+
+        slide.insertBefore(link, img);
+        link.appendChild(img);
+
+        slide.dataset.lightboxWired = "true";
+      });
+    }
+
+    function init(scope = document) {
+      const boxes = [...scope.querySelectorAll(SELECTORS.gallerySlider)];
+      if (!boxes.length) return;
+
+      boxes.forEach(wireBox);
+
+      loadLibrary().then(() => {
+        if (lightboxInstance) {
+          lightboxInstance.reload();
+        } else {
+          lightboxInstance = window.GLightbox({
+            selector: "[data-glightbox]",
+            touchNavigation: true,
+            loop: false,
+          });
+        }
+      });
+    }
+
+    return { init };
+  })();
+
+  /* ============================================================
    * BOOTSTRAP
    * ========================================================== */
   function initPage(scope = document) {
@@ -705,6 +816,7 @@
     CmsInsert.init(scope);
     SyncSlider.init({ root: scope });
     RoomSwitch.init(scope);
+    GalleryLightbox.init(scope);
   }
 
   onReady(() => {
@@ -717,5 +829,6 @@
     SyncSlider.reset();
     SyncSlider.init({ root: document });
     RoomSwitch.init(document);
+    GalleryLightbox.init(document);
   });
 })();
