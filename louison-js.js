@@ -14,6 +14,7 @@
     slider: "[data-element='slider']",
     pinTrigger: ".pin_trigger",
     singleRoomPin: "[data-wf--c-pin-element--variant]",
+    staticRoomPin: "[data-wf--c-static-pin-element--variant]",
     roomPill: ".types_wrapper-item[data-trigger]",
     slideAnchor: "[data-slide]",
   };
@@ -179,11 +180,26 @@
 
   /* ============================================================
    * MODULE: Single room pins (positioned + content placement)
+   * ---------------------------------------------------------
+   * Two pin kinds share this module:
+   *  - [data-wf--c-pin-element--variant]         -> randomized
+   *    position within its quadrant, re-rolled on every layout
+   *    pass via place().
+   *  - [data-wf--c-static-pin-element--variant]  -> author-fixed
+   *    position (CSS/Webflow controls left/top). place() skips
+   *    the randomization branch entirely and only reads the
+   *    current geometry so positionContent() still has what it
+   *    needs to point the hover content box the right way.
    * ========================================================== */
   const SingleRoomPins = (() => {
     function init(scope = document) {
       const attr = "data-wf--c-pin-element--variant";
-      const pins = [...scope.querySelectorAll(SELECTORS.singleRoomPin)];
+      const staticAttr = "data-wf--c-static-pin-element--variant";
+      const pins = [
+        ...scope.querySelectorAll(
+          `${SELECTORS.singleRoomPin}, ${SELECTORS.staticRoomPin}`
+        ),
+      ];
       if (!pins.length) return;
 
       const rootSize =
@@ -193,13 +209,17 @@
       const edge = 0.5 * rootSize;
       const radius = "1.875rem";
 
-      const items = pins.map((el) => ({
-        el,
-        content: el.querySelector(".pin_content"),
-        variant: el.getAttribute(attr) || "",
-        rx: Math.random(),
-        ry: Math.random(),
-      }));
+      const items = pins.map((el) => {
+        const isStatic = el.hasAttribute(staticAttr);
+        return {
+          el,
+          content: el.querySelector(".pin_content"),
+          variant: (isStatic ? el.getAttribute(staticAttr) : el.getAttribute(attr)) || "",
+          isStatic,
+          rx: Math.random(),
+          ry: Math.random(),
+        };
+      });
 
       function place(item) {
         const el = item.el;
@@ -210,6 +230,17 @@
         const ph = parent.clientHeight;
         const ew = el.offsetWidth;
         const eh = el.offsetHeight;
+
+        if (item.isStatic) {
+          item.left = el.offsetLeft;
+          item.top = el.offsetTop;
+          item.pw = pw;
+          item.ph = ph;
+          item.ew = ew;
+          item.eh = eh;
+          return;
+        }
+
         const v = item.variant;
 
         let leftMin, leftMax, topMin, topMax;
