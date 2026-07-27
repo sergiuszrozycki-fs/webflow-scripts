@@ -79,12 +79,13 @@
 
       const isRoomSlider = box.hasAttribute("data-room");
       const isGallerySlider = box.classList.contains("slide-gallery-box");
+      const hasLoop = box.hasAttribute("data-loop");
       const dataSlides = parseFloat(box.getAttribute("data-slides"));
       const desktopSlides = Number.isNaN(dataSlides) ? "auto" : dataSlides;
 
       new Swiper(box, {
         spaceBetween: isGallerySlider ? 10 : 20,
-        loop: false,
+        loop: hasLoop,
         slidesPerView: 1,
         slidesPerGroup: 1,
         watchOverflow: false,
