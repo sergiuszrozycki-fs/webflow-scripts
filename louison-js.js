@@ -46,6 +46,17 @@
     };
   }
 
+  // Runs fn(), logs+swallows any error so one broken module never
+  // blocks the modules that run after it in initPage/inserts:ready.
+  function safeRun(name, fn) {
+    try {
+      fn();
+      console.log(`[init] ${name} OK`);
+    } catch (err) {
+      console.error(`[init] ${name} FAILED —`, err);
+    }
+  }
+
   // open & close contact modal
   const m = document.querySelector(".contact-modal_component"),
     o = document.querySelector(".contact-modal_background-overlay"),
@@ -129,7 +140,10 @@
     function init(scope = document, includeInserted = false) {
       scope.querySelectorAll(SELECTORS.swiper).forEach((box) => {
         if (!includeInserted && box.closest(SELECTORS.insertWrap)) return;
-        build(box);
+        // Isolate per-box: one malformed slider shouldn't stop the rest.
+        safeRun(`Swipers.build(${box.className || box.tagName})`, () =>
+          build(box)
+        );
       });
     }
 
@@ -190,16 +204,6 @@
 
   /* ============================================================
    * MODULE: Single room pins (positioned + content placement)
-   * ---------------------------------------------------------
-   * Two pin kinds share this module:
-   *  - [data-wf--c-pin-element--variant]         -> randomized
-   *    position within its quadrant, re-rolled on every layout
-   *    pass via place().
-   *  - [data-wf--c-static-pin-element--variant]  -> author-fixed
-   *    position (CSS/Webflow controls left/top). place() skips
-   *    the randomization branch entirely and only reads the
-   *    current geometry so positionContent() still has what it
-   *    needs to point the hover content box the right way.
    * ========================================================== */
   const SingleRoomPins = (() => {
     function init(scope = document) {
@@ -252,7 +256,6 @@
         }
 
         const v = item.variant;
-
         let leftMin, leftMax, topMin, topMax;
 
         if (v === "center") {
@@ -338,8 +341,8 @@
 
       function update() {
         items.forEach((item) => {
-          place(item);
-          positionContent(item);
+          safeRun("SingleRoomPins.place", () => place(item));
+          safeRun("SingleRoomPins.positionContent", () => positionContent(item));
         });
       }
 
@@ -396,29 +399,31 @@
 
     function init(scope = document) {
       scope.querySelectorAll(SELECTORS.contents).forEach((contents) => {
-        const insert = findClosestRelated(
-          contents.parentElement,
-          SELECTORS.insertWrap
-        );
-        if (!insert) return;
+        safeRun("CmsInsert (per contents block)", () => {
+          const insert = findClosestRelated(
+            contents.parentElement,
+            SELECTORS.insertWrap
+          );
+          if (!insert) return;
 
-        const quote = insert.querySelector(SELECTORS.quote);
-        const slider = insert.querySelector(SELECTORS.slider);
+          const quote = insert.querySelector(SELECTORS.quote);
+          const slider = insert.querySelector(SELECTORS.slider);
 
-        if (quote) placeInsertToken(contents, "{{quote}}", quote);
-        if (slider) placeInsertToken(contents, "{{slider}}", slider);
+          if (quote) placeInsertToken(contents, "{{quote}}", quote);
+          if (slider) placeInsertToken(contents, "{{slider}}", slider);
 
-        insert.remove();
+          insert.remove();
 
-        if (slider) {
-          slider.querySelectorAll(SELECTORS.swiper).forEach((box) => {
-            if (box.swiper) {
-              box.swiper.update();
-            } else {
-              Swipers.build(box);
-            }
-          });
-        }
+          if (slider) {
+            slider.querySelectorAll(SELECTORS.swiper).forEach((box) => {
+              if (box.swiper) {
+                box.swiper.update();
+              } else {
+                Swipers.build(box);
+              }
+            });
+          }
+        });
       });
     }
 
@@ -515,12 +520,6 @@
 
   /* ============================================================
    * MODULE: Room switch (pill <-> slide, matched by value)
-   * ---------------------------------------------------------
-   * Two layouts, same trigger mechanism:
-   *  - Absolute stack  -> toggle opacity via is-hidden
-   *  - .is-relative    -> sticky/in-flow. All math uses LAYOUT
-   *    position (offsetTop chain), never rendered geometry, so
-   *    sticky pinning can't distort the click target or the spy.
    * ========================================================== */
   const RoomSwitch = (() => {
     let booted = false;
@@ -552,14 +551,6 @@
       return top;
     }
 
-    // True in-flow top of a slide, immune to sticky pinning.
-    // offsetTop is NOT sticky-proof: a pinned slide reports a top near the
-    // current scroll position, so scrolling "back" to an already-pinned slide
-    // computes a target ≈ where we already are and nothing happens. Neutralize
-    // the slide's own sticky positioning, read its real offset, then restore.
-    // The read is synchronous and position is restored before paint, so there
-    // is no visible flicker. (Assumes only the slides are sticky, not their
-    // ancestors up to the scroller — matches the documented DOM.)
     function flowTop(el, scroller) {
       const prev = el.style.position;
       el.style.position = "static";
@@ -645,8 +636,6 @@
         });
       });
 
-      // scroll-spy: position-derived (not edge-triggered), so it
-      // resolves correctly scrolling both up and down through sticky slides
       if (relativeSlides.length) {
         const scroller = getScroller(relativeSlides[0]);
 
@@ -707,12 +696,6 @@
 
   /* ============================================================
    * MODULE: Gallery lightbox (chambre photo sliders -> GLightbox)
-   * ---------------------------------------------------------
-   * Loads GLightbox from CDN on first use, wraps each gallery
-   * slide's image in an anchor pointing at its largest available
-   * srcset candidate, and groups anchors per swiper instance via
-   * data-gallery so multiple room galleries on the same page
-   * don't bleed into each other when navigating the lightbox.
    * ========================================================== */
   const GalleryLightbox = (() => {
     let libraryLoading = null;
@@ -789,19 +772,21 @@
       const boxes = [...scope.querySelectorAll(SELECTORS.gallerySlider)];
       if (!boxes.length) return;
 
-      boxes.forEach(wireBox);
+      boxes.forEach((box) => safeRun("GalleryLightbox.wireBox", () => wireBox(box)));
 
-      loadLibrary().then(() => {
-        if (lightboxInstance) {
-          lightboxInstance.reload();
-        } else {
-          lightboxInstance = window.GLightbox({
-            selector: "[data-glightbox]",
-            touchNavigation: true,
-            loop: false,
-          });
-        }
-      });
+      loadLibrary()
+        .then(() => {
+          if (lightboxInstance) {
+            lightboxInstance.reload();
+          } else {
+            lightboxInstance = window.GLightbox({
+              selector: "[data-glightbox]",
+              touchNavigation: true,
+              loop: false,
+            });
+          }
+        })
+        .catch((err) => console.error("[init] GalleryLightbox library load FAILED —", err));
     }
 
     return { init };
@@ -809,15 +794,21 @@
 
   /* ============================================================
    * BOOTSTRAP
+   * ---------------------------------------------------------
+   * Each module now runs isolated via safeRun(), so a thrown
+   * error in one module (e.g. Swipers or CmsInsert on a specific
+   * locale) can no longer prevent SyncSlider / RoomSwitch / etc.
+   * from initializing. Check console for "[init] X FAILED" logs
+   * to pinpoint which module is broken on a given locale.
    * ========================================================== */
   function initPage(scope = document) {
-    Swipers.init(scope, false);
-    ListingPins.init(scope);
-    SingleRoomPins.init(scope);
-    CmsInsert.init(scope);
-    SyncSlider.init({ root: scope });
-    RoomSwitch.init(scope);
-    GalleryLightbox.init(scope);
+    safeRun("Swipers", () => Swipers.init(scope, false));
+    safeRun("ListingPins", () => ListingPins.init(scope));
+    safeRun("SingleRoomPins", () => SingleRoomPins.init(scope));
+    safeRun("CmsInsert", () => CmsInsert.init(scope));
+    safeRun("SyncSlider", () => SyncSlider.init({ root: scope }));
+    safeRun("RoomSwitch", () => RoomSwitch.init(scope));
+    safeRun("GalleryLightbox", () => GalleryLightbox.init(scope));
   }
 
   onReady(() => {
@@ -825,11 +816,11 @@
   });
 
   document.addEventListener("inserts:ready", () => {
-    CmsInsert.init(document);
-    Swipers.init(document, true);
-    SyncSlider.reset();
-    SyncSlider.init({ root: document });
-    RoomSwitch.init(document);
-    GalleryLightbox.init(document);
+    safeRun("CmsInsert (inserts:ready)", () => CmsInsert.init(document));
+    safeRun("Swipers (inserts:ready)", () => Swipers.init(document, true));
+    safeRun("SyncSlider.reset (inserts:ready)", () => SyncSlider.reset());
+    safeRun("SyncSlider.init (inserts:ready)", () => SyncSlider.init({ root: document }));
+    safeRun("RoomSwitch (inserts:ready)", () => RoomSwitch.init(document));
+    safeRun("GalleryLightbox (inserts:ready)", () => GalleryLightbox.init(document));
   });
 })();
