@@ -57,22 +57,129 @@
     }
   }
 
-  // open & close contact modal
-  const m = document.querySelector(".contact-modal_component"),
-    o = document.querySelector(".contact-modal_background-overlay"),
-    c = document.querySelector(".contact-modal_close-button");
-  document
-    .querySelectorAll("[data-trigger='contact']")
-    .forEach((t) =>
-      t.addEventListener("click", () => m?.classList.add("show"))
-    );
-  [o, c].forEach((el) =>
-    el?.addEventListener("click", () => m?.classList.remove("show"))
-  );
-  document.addEventListener(
-    "keydown",
-    (e) => e.key === "Escape" && m?.classList.remove("show")
-  );
+  // Single source of truth for "this is a real navigation link".
+  // Any element that resolves true here must NEVER be hijacked as a
+  // JS trigger and must never receive preventDefault().
+  // Anchors with no href, href="#" or a javascript: href are inert
+  // and therefore safe to use as triggers.
+  function isRealNavLink(el) {
+    if (!el || el.tagName !== "A") return false;
+    const href = (el.getAttribute("href") || "").trim();
+    if (!href) return false;
+    if (href === "#") return false;
+    if (href.toLowerCase().startsWith("javascript:")) return false;
+    return true;
+  }
+
+  /* ============================================================
+   * MODULE: LinkGuard (protect real links from trigger hijacking)
+   * ---------------------------------------------------------
+   * Webflow components frequently ship an empty data-trigger=""
+   * attribute (inherited from a component definition). Any script
+   * querying [data-trigger] then binds a click handler with
+   * preventDefault() to what is actually a navigation link — the
+   * /faq button being the known case.
+   *
+   * sanitize() removes the meaningless empty attribute BEFORE other
+   * scripts get a chance to query it, and tags the element with
+   * data-nav-guard so we can still recognise it later.
+   *
+   * rescue() is the safety net: if any other handler (page-level
+   * embed, legacy build, third-party attribute) still cancels the
+   * click on a guarded link, we perform the navigation ourselves.
+   * ========================================================== */
+  const LinkGuard = (() => {
+    const GUARDED = "a[data-trigger], a[data-nav-guard]";
+
+    function sanitize(scope = document) {
+      const root = scope && scope.querySelectorAll ? scope : document;
+      root.querySelectorAll("a[data-trigger]").forEach((link) => {
+        if (!isRealNavLink(link)) return;
+        const value = (link.getAttribute("data-trigger") || "").trim();
+        if (value) return;
+        link.removeAttribute("data-trigger");
+        link.setAttribute("data-nav-guard", "");
+      });
+    }
+
+    function rescue(e) {
+      if (!e.defaultPrevented) return;
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+        return;
+
+      const target = e.target;
+      const link =
+        target && target.closest ? target.closest(GUARDED) : null;
+      if (!link || !isRealNavLink(link)) return;
+      if (link.hasAttribute("data-glightbox")) return;
+
+      console.warn(
+        "[LinkGuard] click was cancelled on a real link — restoring navigation to",
+        link.getAttribute("href")
+      );
+
+      if (link.target === "_blank") {
+        window.open(link.href, "_blank", "noopener");
+      } else {
+        window.location.href = link.href;
+      }
+    }
+
+    function init(scope = document) {
+      sanitize(scope);
+    }
+
+    document.addEventListener("click", rescue);
+
+    return { init, sanitize };
+  })();
+
+  // Run as early as possible so late-binding scripts never see the
+  // empty data-trigger attribute on navigation links.
+  LinkGuard.sanitize();
+
+  /* ============================================================
+   * MODULE: Contact modal
+   * ========================================================== */
+  const ContactModal = (() => {
+    let booted = false;
+
+    function init(scope = document) {
+      if (booted) return;
+
+      const modal = document.querySelector(".contact-modal_component");
+      const overlay = document.querySelector(
+        ".contact-modal_background-overlay"
+      );
+      const close = document.querySelector(".contact-modal_close-button");
+      if (!modal) return;
+
+      booted = true;
+
+      document
+        .querySelectorAll("[data-trigger='contact']")
+        .forEach((trigger) =>
+          trigger.addEventListener("click", (e) => {
+            // A real link that also carries data-trigger="contact"
+            // should navigate, not open the modal.
+            if (isRealNavLink(trigger)) return;
+            if (trigger.tagName === "A") e.preventDefault();
+            modal.classList.add("show");
+          })
+        );
+
+      [overlay, close].forEach((el) =>
+        el?.addEventListener("click", () => modal.classList.remove("show"))
+      );
+
+      document.addEventListener(
+        "keydown",
+        (e) => e.key === "Escape" && modal.classList.remove("show")
+      );
+    }
+
+    return { init };
+  })();
 
   /* ============================================================
    * MODULE: Swipers
@@ -228,7 +335,9 @@
         return {
           el,
           content: el.querySelector(".pin_content"),
-          variant: (isStatic ? el.getAttribute(staticAttr) : el.getAttribute(attr)) || "",
+          variant:
+            (isStatic ? el.getAttribute(staticAttr) : el.getAttribute(attr)) ||
+            "",
           isStatic,
           rx: Math.random(),
           ry: Math.random(),
@@ -436,16 +545,6 @@
   const SyncSlider = (() => {
     let booted = false;
 
-    // Real navigation links (e.g. <a href="/faq">) should never be
-    // hijacked as slide-switch triggers, even if they carry a stray
-    // data-trigger="" attribute from Webflow. Only anchors with no
-    // href, or a same-page "#" href, are eligible to act as triggers.
-    function isRealNavLink(el) {
-      if (el.tagName !== "A") return false;
-      const href = el.getAttribute("href");
-      return !!href && href !== "#";
-    }
-
     function wire(options) {
       const {
         triggerAttr = "data-trigger",
@@ -470,7 +569,7 @@
 
       const triggers = [...root.querySelectorAll(triggerSelector)].filter(
         (trigger) => {
-          const value = trigger.getAttribute(triggerAttr);
+          const value = (trigger.getAttribute(triggerAttr) || "").trim();
           // Skip missing/empty trigger values (e.g. a real link that
           // merely inherited an empty data-trigger="" attribute) and
           // skip anchors that point to a real destination — those are
@@ -499,13 +598,14 @@
         });
       }
 
-     triggers.forEach((trigger) => {
-    trigger.addEventListener("click", (e) => {
-        if (trigger.matches("a[href]")) return;
-        e.preventDefault();
-        activate(trigger.getAttribute(triggerAttr));
-    });
-});
+      triggers.forEach((trigger) => {
+        trigger.addEventListener("click", (e) => {
+          // Belt and braces: never cancel a real navigation link.
+          if (isRealNavLink(trigger)) return;
+          e.preventDefault();
+          activate(trigger.getAttribute(triggerAttr));
+        });
+      });
 
       activate(defaultValue ?? triggers[0].getAttribute(triggerAttr));
       return true;
@@ -513,13 +613,17 @@
 
     function init(options = {}) {
       if (booted) return;
+
+      const root = options.root ?? document;
+      LinkGuard.sanitize(root);
+
       if (wire(options)) {
         booted = true;
         return;
       }
 
-      const root = options.root ?? document;
       const mo = new MutationObserver(() => {
+        LinkGuard.sanitize(root);
         if (wire(options)) {
           booted = true;
           mo.disconnect();
@@ -604,7 +708,8 @@
 
     function wire(scope) {
       const pills = [...scope.querySelectorAll(SELECTORS.roomPill)].filter(
-        (pill) => pill.dataset.trigger
+        (pill) =>
+          (pill.dataset.trigger || "").trim() && !isRealNavLink(pill)
       );
       const slides = [...scope.querySelectorAll(SELECTORS.slideAnchor)];
       if (!pills.length || !slides.length) return false;
@@ -652,6 +757,7 @@
         if (bound.has(pill)) return;
         bound.add(pill);
         pill.addEventListener("click", (e) => {
+          if (isRealNavLink(pill)) return;
           e.preventDefault();
           activate(pill.dataset.trigger, false);
         });
@@ -697,12 +803,16 @@
 
     function init(scope = document) {
       if (booted) return;
+
+      LinkGuard.sanitize(scope);
+
       if (wire(scope)) {
         booted = true;
         return;
       }
 
       const mo = new MutationObserver(() => {
+        LinkGuard.sanitize(document);
         if (wire(document)) {
           booted = true;
           mo.disconnect();
@@ -764,7 +874,8 @@
       const slides = [...box.querySelectorAll(SELECTORS.gallerySlide)];
       if (!slides.length) return;
 
-      const galleryName = box.dataset.lightboxGallery || `chambre-gallery-${uid++}`;
+      const galleryName =
+        box.dataset.lightboxGallery || `chambre-gallery-${uid++}`;
       box.dataset.lightboxGallery = galleryName;
 
       slides.forEach((slide) => {
@@ -793,7 +904,9 @@
       const boxes = [...scope.querySelectorAll(SELECTORS.gallerySlider)];
       if (!boxes.length) return;
 
-      boxes.forEach((box) => safeRun("GalleryLightbox.wireBox", () => wireBox(box)));
+      boxes.forEach((box) =>
+        safeRun("GalleryLightbox.wireBox", () => wireBox(box))
+      );
 
       loadLibrary()
         .then(() => {
@@ -807,7 +920,9 @@
             });
           }
         })
-        .catch((err) => console.error("[init] GalleryLightbox library load FAILED —", err));
+        .catch((err) =>
+          console.error("[init] GalleryLightbox library load FAILED —", err)
+        );
     }
 
     return { init };
@@ -816,13 +931,19 @@
   /* ============================================================
    * BOOTSTRAP
    * ---------------------------------------------------------
-   * Each module now runs isolated via safeRun(), so a thrown
-   * error in one module (e.g. Swipers or CmsInsert on a specific
-   * locale) can no longer prevent SyncSlider / RoomSwitch / etc.
-   * from initializing. Check console for "[init] X FAILED" logs
-   * to pinpoint which module is broken on a given locale.
+   * Each module runs isolated via safeRun(), so a thrown error in
+   * one module (e.g. Swipers or CmsInsert on a specific locale) can
+   * no longer prevent SyncSlider / RoomSwitch / etc. from
+   * initializing. Check console for "[init] X FAILED" logs to
+   * pinpoint which module is broken on a given locale.
+   *
+   * LinkGuard runs first so that real navigation links are cleaned
+   * of empty data-trigger attributes before any trigger-binding
+   * module (or any page-level embed) queries them.
    * ========================================================== */
   function initPage(scope = document) {
+    safeRun("LinkGuard", () => LinkGuard.init(scope));
+    safeRun("ContactModal", () => ContactModal.init(scope));
     safeRun("Swipers", () => Swipers.init(scope, false));
     safeRun("ListingPins", () => ListingPins.init(scope));
     safeRun("SingleRoomPins", () => SingleRoomPins.init(scope));
@@ -837,11 +958,16 @@
   });
 
   document.addEventListener("inserts:ready", () => {
+    safeRun("LinkGuard (inserts:ready)", () => LinkGuard.sanitize(document));
     safeRun("CmsInsert (inserts:ready)", () => CmsInsert.init(document));
     safeRun("Swipers (inserts:ready)", () => Swipers.init(document, true));
     safeRun("SyncSlider.reset (inserts:ready)", () => SyncSlider.reset());
-    safeRun("SyncSlider.init (inserts:ready)", () => SyncSlider.init({ root: document }));
+    safeRun("SyncSlider.init (inserts:ready)", () =>
+      SyncSlider.init({ root: document })
+    );
     safeRun("RoomSwitch (inserts:ready)", () => RoomSwitch.init(document));
-    safeRun("GalleryLightbox (inserts:ready)", () => GalleryLightbox.init(document));
+    safeRun("GalleryLightbox (inserts:ready)", () =>
+      GalleryLightbox.init(document)
+    );
   });
 })();
