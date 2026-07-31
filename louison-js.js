@@ -436,6 +436,16 @@
   const SyncSlider = (() => {
     let booted = false;
 
+    // Real navigation links (e.g. <a href="/faq">) should never be
+    // hijacked as slide-switch triggers, even if they carry a stray
+    // data-trigger="" attribute from Webflow. Only anchors with no
+    // href, or a same-page "#" href, are eligible to act as triggers.
+    function isRealNavLink(el) {
+      if (el.tagName !== "A") return false;
+      const href = el.getAttribute("href");
+      return !!href && href !== "#";
+    }
+
     function wire(options) {
       const {
         triggerAttr = "data-trigger",
@@ -459,7 +469,16 @@
         );
 
       const triggers = [...root.querySelectorAll(triggerSelector)].filter(
-        (trigger) => hasMatch(trigger.getAttribute(triggerAttr))
+        (trigger) => {
+          const value = trigger.getAttribute(triggerAttr);
+          // Skip missing/empty trigger values (e.g. a real link that
+          // merely inherited an empty data-trigger="" attribute) and
+          // skip anchors that point to a real destination — those are
+          // navigation links, not slide-switch controls.
+          if (!value) return false;
+          if (isRealNavLink(trigger)) return false;
+          return hasMatch(value);
+        }
       );
       if (!triggers.length) return false;
 
