@@ -480,11 +480,13 @@
         });
       }
 
-      triggers.forEach((trigger) => {
-        trigger.addEventListener("click", () => {
-          activate(trigger.getAttribute(triggerAttr));
-        });
-      });
+     triggers.forEach((trigger) => {
+    trigger.addEventListener("click", (e) => {
+        if (trigger.matches("a[href]")) return;
+        e.preventDefault();
+        activate(trigger.getAttribute(triggerAttr));
+    });
+});
 
       activate(defaultValue ?? triggers[0].getAttribute(triggerAttr));
       return true;
